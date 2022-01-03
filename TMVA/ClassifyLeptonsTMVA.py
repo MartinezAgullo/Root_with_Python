@@ -10,6 +10,7 @@ import configparser
 import multiprocessing as mp
 
 
+
 def main(argv):
     debugLevel = 0
     msg = msgServer('ClassifyLeptonsTMVA.py', debugLevel)
@@ -18,10 +19,216 @@ def main(argv):
     
     tree, inFile = Loader(debugLevel, config) #it is necessary to keep the TFile alive so taht the TTree doesn't become "none"
     
-    #scanParams(debugLevel, config, tree)
-    TMVA_Runner(debugLevel, config, tree)
+    scanParams(debugLevel, config, tree)    # Run Gradinet BDTs over a grid of hyperparameters
+    #TMVA_Runner(debugLevel, config, tree)  # Explore different TMVA methods
+    
     
 
+# =====================================================================
+#  scanParams: Grid exploration of hyperparameters for the Gradient BDT
+# =====================================================================
+def scanParams(debugLevel, config, tree):
+    import itertools
+    msg = msgServer('scanParams', debugLevel)
+    
+    i = 1
+    depth = getList(config['BDT_scanner']['depth'])
+    ncuts = getList(config['BDT_scanner']['ncuts'])
+    ntrees = getList(config['BDT_scanner']['ntrees'])
+    shrink = getList(config['BDT_scanner']['shrink'])
+    negWeights = getList(config['BDT_scanner']['negWeights'])
+    
+    comb = [shrink, depth, ncuts, ntrees, negWeights]
+    ncomb = list(itertools.product(*comb))
+
+    msg.printInfo("Grid exploration of BDT")
+    msg.printInfo(" --> depth = "+str(depth))
+    msg.printInfo(" --> ncuts = "+str(ncuts))
+    msg.printInfo(" --> ntrees = "+str(ntrees))
+    msg.printInfo(" --> shrink = "+str(shrink))
+    msg.printInfo("Number of configurations = "+str(len(ncomb)))
+    
+    msg.printDebug("Storing log files in: " + config['BDT_scanner']['log_dir'])
+    msg.printDebug("Storing BDTs in: " + config['BDT_scanner']['BDTs_dir'])
+    if not os.path.exists(str(config['BDT_scanner']['log_dir'])): msg.printFatal("log_dir :: The path '" + str(config['BDT_scanner']['BDTs_dir']) + "' does not exist")
+    if not os.path.exists(str(config['BDT_scanner']['BDTs_dir'])): msg.printFatal("BDTs_dir :: The path '" + str(config['BDT_scanner']['BDTs_dir']) + "' does not exist")
+    
+    pool = mp.Pool(processes = 10)
+    msg.printGreen("Start pooling:")
+    for conf in ncomb :
+        msg.printDebug("Pooling for "+str(conf))
+        #defineBDT(debugLevel, config, tree, "BDTG_"+str(i), i, conf[0], conf[1], conf[2], conf[3], conf[4])
+        result = pool.apply_async(defineBDT,args=(debugLevel, config, tree, "BDTG_"+str(i), i, conf[0], conf[1], conf[2], conf[3], conf[4]))
+        #The Pool object a convenient means of parallelizing the execution of a function across multiple input values, distributing the input data across processes.
+        #if i == 1:
+        #    msg.printInfo("Leaving loop after BTD_" + str(i))
+        #    break
+        i = i+1
+    msg.printDebug("End pooling")
+    
+    msg.printDebug("Waiting for the processes to end")
+    pool.close()
+        
+    msg.printDebug("Waiting all asynchronous processes to end")
+    pool.join()
+                   
+    msg.printDebug("All processes finished")
+
+
+
+# =====================================================================
+#  defineBDT: To explore the performance of the BDT depending on the hypeparameters used
+# =====================================================================
+def defineBDT(debugLevel, config, tree, output, i, shrink=0.2, depth=5, ncuts=30, ntrees=1500, negWeights = "IgnoreNegWeightsInTraining"):
+    msg = msgServer('defineBDT', debugLevel)
+    log_dir = config['BDT_scanner']['log_dir']
+    BDTs_dir = config['BDT_scanner']['BDTs_dir']
+    msg.printGreen(" Running BDT "+str(i)+" -> [NTrees="+str(ntrees)+", Shrinkage="+str(shrink)+", nCuts="+str(ncuts)+" MaxDepth="+str(depth)+", NegWeightTreatment="+str(negWeights))
+    #ROOT.gSystem.RedirectOutput(str(log_dir)+"log_"+output+"_"+str(os.getpid()) + ".log")
+    outName = str(BDTs_dir)+output+"_"+str(shrink)+"_"+str(depth)+"_"+str(ncuts)+"_"+str(ntrees)+".root"
+    rootFile = ROOT.TFile(outName,"RECREATE")
+    msg.printDebug(str(i) + " --> rootFile :: " + str(rootFile.GetName()))
+    
+    msg.printDebug(str(i)+ " --> Defining the dataloader")
+    dataloader = ROOT.TMVA.DataLoader('dataset')
+    variables_tmva = getVars(config['Features']['variables_tmva'])
+    variables_spectator = getVars(config['Features']['variables_spectator'])
+    variable_target = config['Features']['variable_target']
+    
+    msg.printDebug(str(i)+ " --> Defining variables")
+    for var in variables_tmva:
+        dataloader.AddVariable(var[0],var[1])
+    for var in variables_spectator:
+        dataloader.AddSpectator(var[0],var[1])
+
+    msg.printBlue(str(i)+ " --> Defining signal and background")
+    # is_Lep1_from_Top = 1 is defined as signal and is_Lep1_from_Top=0 as background"
+    dataloader.AddSignalTree(tree, 1.0)
+    dataloader.SetSignalWeightExpression("weight_nominal")
+    dataloader.AddBackgroundTree(tree, 1.0)
+    dataloader.SetBackgroundWeightExpression("weight_nominal")
+    mycuts = ROOT.TCut("is_Lep1_from_Top==1")
+    mycutb = ROOT.TCut("is_Lep1_from_Top==0")
+    
+    msg.printBlue(str(i)+ " --> Preparing test and train samples")
+    dataloader.PrepareTrainingAndTestTree(mycuts, mycutb,
+                                        "nTrain_Signal=0:nTrain_Background=0:SplitMode=Random:NormMode=NumEvents:!V")
+        
+    msg.printDebug(str(i)+ " --> Defining Classification factory")
+    factory = ROOT.TMVA.Factory("TMVAClassification", rootFile,"!V:!Silent:Color:DrawProgressBar:AnalysisType=Classification")
+
+                                        
+    msg.printDebug(str(i)+ " --> Booking TMVA method")
+    #msg.printDebug("!H:!V:VarTransform=D,G:NTrees="+str(ntrees)+":BoostType=Grad:Shrinkage="+str(shrink)+":UseBaggedBoost:BaggedSampleFraction=0.5:nCuts="+str(ncuts)+":MaxDepth="+str(depth)+":NegWeightTreatment="+str(negWeights))
+    factory.BookMethod(dataloader, ROOT.TMVA.Types.kBDT, "BDTG_"+str(i),"!H:!V:VarTransform=D,G:NTrees="+str(ntrees)+":BoostType=Grad:Shrinkage="+str(shrink)+":UseBaggedBoost:BaggedSampleFraction=0.5:nCuts="+str(ncuts)+":MaxDepth="+str(depth)+":NegWeightTreatment="+str(negWeights))
+                
+    # Run training, test and evaluation
+    msg.printDebug(str(i)+ " --> Train, test and evaluate the BDT")
+    factory.TrainAllMethods()
+    factory.TestAllMethods()
+    factory.EvaluateAllMethods()
+
+    rootFile.Close()
+    msg.printGreen(" Running BDT "+str(i)+" -> Finnished")
+
+    return 1
+
+
+# =====================================================================
+#  Loader: Loads the input root file
+# =====================================================================
+def Loader(debugLevel, config):
+    msg = msgServer('Loader', debugLevel)
+    filename = config['input']['filename']
+    filepath = config['input']['filepath']
+    if not os.path.exists(str(filepath)):
+        msg.printFatal("The path " + str(filepath) + " does not exist.")
+        msg.printInfo("Exiting")
+        exit()
+    filepath = str(filepath) + str(filename)
+    treeName = str(config['input']['treeName'])
+    
+    if not os.path.exists(filepath):
+        msg.printFatal("The file " + str(filename) + " does not exist in the given path.")
+    
+    inFile = ROOT.TFile.Open(filepath, "READ")
+    tree = inFile.Get(treeName)
+    msg.printDebug("Tree : " + str(tree))
+    return tree, inFile
+
+# =====================================================================
+#  getVars
+# =====================================================================
+def getVars(varString):
+    varString = varString.replace(" ", "")
+    varlist = varString.split(",")
+    varArray = []
+    for v in varlist :
+        varArray.append(v.strip().split(":"))
+    return varArray
+
+# =====================================================================
+#  getList
+# =====================================================================
+def getList(varString):
+    varString = varString.replace(" ", "")
+    varArray = varString.split(",")
+    return varArray
+
+
+# =====================================================================
+#  msgServer: Display text in a fancy way
+# =====================================================================
+class msgServer:
+    def __init__(self, algName='',debugLevel=4):
+        self.algName = algName
+        self.text = ''
+
+        # output debug level: DEBUG=0, INFO=1, WARNING=2, ERROR=3, FATAL=4
+        self.debugLevel = debugLevel
+        self.EndColor='\033[0m'       # Text color reset
+        self.Black='\033[0;30m'        # Black
+        self.Red='\033[0;31m'          # Red
+        self.Green='\033[0;32m'        # Green
+        self.Yellow='\033[0;33m'       # Yellow
+        self.Blue='\033[0;34m'         # Blue
+        self.Purple='\033[0;35m'       # Purple
+        self.Cyan='\033[0;36m'         # Cyan
+        self.White='\033[0;37m'        # White
+        self.BBlack='\033[1;30m'       # Bold Black
+        self.BRed='\033[1;31m'         # Bold Red
+        self.BGreen='\033[1;32m'       # Bold Green
+        self.BYellow='\033[1;33m'      # Bold Yellow
+        self.BBlue='\033[1;34m'        # Bold Blue
+        self.BPurple='\033[1;35m'      # Bold Purple
+        self.BCyan='\033[1;36m'        # Bold Cyan
+        self.BWhite='\033[1;37m'       # Bold White
+        self.BOLD = "\033[1m"
+
+
+        # Print methods
+    def printDebug(self, msg):
+        if self.debugLevel < 1: print(str(self.algName) + '\t' + str('DEBUG') + '\t \t' + str(msg))
+    def printInfo(self, msg):
+        if self.debugLevel < 2: print(str(self.algName) + '\t' + str('INFO') + '\t\t' + str(msg))
+    def printWarning(self, msg):
+        if self.debugLevel < 3: print(str(self.Yellow) + str(self.algName) + '\t' + str('WARNING') + '\t\t' + str(msg) + str(self.EndColor))
+    def printError(self, msg):
+        if self.debugLevel < 4: print(str(self.Red) + str(self.algName) + '\t' + str('ERROR') + '\t\t' + str(msg)  + str(self.EndColor))
+    def printFatal(self, msg):
+        print(str(self.BRed) + str(self.algName) + '\t' + str('FATAL') + '\t\t' + str(msg) + str(self.EndColor)) #'-16s %-12s %s'+str(self.EndColor)) % (self.algName, 'FATAL', msg)
+    # colors
+    def printBlue(self, msg): print(str(self.Blue) + str(self.algName) + '\t' + str('INFO') + '\t\t' + str(msg)+ str(self.EndColor))
+    def printRed(self, msg): print(str(self.Red) + str(self.algName) + '\t' + str('INFO') + '\t\t' + str(msg)+ str(self.EndColor))
+    def printGreen(self, msg): print(str(self.Green) + str(self.algName) + '\t' + str('INFO') + '\t\t' + str(msg)+ str(self.EndColor))
+
+    # extras
+    def printBold(self, msg): print(str(self.BOLD) + str(self.algName) + '\t' + str('INFO') + '\t\t' + str(msg)+ str(self.EndColor))
+
+
+# =====================================================================
+#  TMVA_Runner: To explore different TMVA methods appart from the Gradient BDT
+# =====================================================================
 def TMVA_Runner(debugLevel, config, tree):
     msg = msgServer('TMVA_Runner', debugLevel)
     AnalysisType = config['MVA']['AnalysisType']
@@ -45,17 +252,12 @@ def TMVA_Runner(debugLevel, config, tree):
     msg.printDebug("Adding spectator variables")  # not used in the MVA training but will appear in the final tree produced by TMVA
     for var in variables_spectator:
         dataloader.AddSpectator(var[0],var[1])
+    
     if AnalysisType == "Regression":
         msg.printDebug("Adding the variable carrying the regression taret")
         dataloader.AddTarget("is_Lep1_from_Top")
         msg.printDebug("Label loaded")
-    
-
-    
-    #if False:
-    #    msg.printDebug("Seting all weights to 1")
-    #    dataloader.AddRegressionTree(tree, 1.0)
-    if AnalysisType == "Regression":
+        
         msg.printDebug("Using weight_nominal")
         dataloader.AddRegressionTree(tree, 1.0)
         dataloader.SetWeightExpression("weight_nominal", "Regression")
@@ -163,7 +365,7 @@ def TMVA_Runner(debugLevel, config, tree):
     msg.printDebug("Evaluating different methods")
     factory.EvaluateAllMethods()    #Evaluate and compare performance of all configured MVAs
     
-    if AnalysisType == "Classification" and False:
+    if AnalysisType == "Classification" and False: # Deactivated
         msg.printDebug("Plot ROC curve")
         c1 = factory.GetROCCurve(dataloader)
         c1.Draw()
@@ -182,218 +384,6 @@ def TMVA_Runner(debugLevel, config, tree):
     msg.printDebug("\t TMVA::TMVAGui(\""+str(outputFile.GetName())+"\")")
     #ROOT.TMVA.TMVARegGui(str(outputFile.GetName()))
     #ROOT.TMVA.TMVAGui(str(outputFile.GetName()))
-
-
-
-# =====================================================================
-#  defineBDT: BDT optimised by scanParams
-# =====================================================================
-def defineBDT(debugLevel, config, tree, output, i, shrink=0.2, depth=5, ncuts=30, ntrees=1500, negWeights = "IgnoreNegWeightsInTraining"):
-    msg = msgServer('defineBDT', debugLevel)
-    log_dir = config['BDT_scanner']['log_dir']
-    BDTs_dir = config['BDT_scanner']['BDTs_dir']
-    msg.printGreen(" Running BDT "+str(i)+" -> [NTrees="+str(ntrees)+", Shrinkage="+str(shrink)+", nCuts="+str(ncuts)+" MaxDepth="+str(depth)+", NegWeightTreatment="+str(negWeights))
-    #ROOT.gSystem.RedirectOutput(str(log_dir)+"log_"+output+"_"+str(os.getpid()) + ".log")
-    outName = str(BDTs_dir)+output+"_"+str(shrink)+"_"+str(depth)+"_"+str(ncuts)+"_"+str(ntrees)+".root"
-    rootFile = ROOT.TFile(outName,"RECREATE")
-    msg.printDebug(str(i) + " rootFile :: " + str(rootFile.GetName()))
-    msg.printDebug(str(i)+ " --> Defining factory")
-    factory =  ROOT.TMVA.Factory("TMVAClassification", rootFile,
-                                 ":".join([
-                                     "!V",
-                                     "!Silent",
-                                     "Color",
-                                     "DrawProgressBar",
-                                     "Transformations=I;D;P;G,D",
-                                     "AnalysisType=Classification"]
-                                      ))
-
-    msg.printDebug(str(i)+ " --> Defining the dataloader, variables and what is signal or background")
-    dataloader = ROOT.TMVA.DataLoader('dataset')
-    variables_tmva = getVars(config['Features']['variables_tmva'])
-    variables_spectator = getVars(config['Features']['variables_spectator'])
-    variable_target = config['Features']['variable_target']
-    
-    for var in variables_tmva:
-        dataloader.AddVariable(var[0],var[1])
-    for var in variables_spectator:
-        dataloader.AddSpectator(var[0],var[1])
-    
-    
-    # is_Lep1_from_Top = 1 is defined as signal and is_Lep1_from_Top=0 as background"
-    dataloader.AddSignalTree(tree, 1.0)
-    dataloader.SetSignalWeightExpression("weight_nominal")
-    dataloader.AddBackgroundTree(tree, 1.0)
-    dataloader.SetBackgroundWeightExpression("weight_nominal")
-    mycuts = ROOT.TCut("is_Lep1_from_Top==1")
-    mycutb = ROOT.TCut("is_Lep1_from_Top==0")
-    dataloader.PrepareTrainingAndTestTree( mycuts, mycutb,
-                                        "nTrain_Signal=0:nTrain_Background=0:SplitMode=Random:NormMode=NumEvents:!V" )
-                                        
-    msg.printDebug(str(i)+ " --> Booking TMVA method")
-    #msg.printDebug("!H:!V:VarTransform=D,G:NTrees="+str(ntrees)+":BoostType=Grad:Shrinkage="+str(shrink)+":UseBaggedBoost:BaggedSampleFraction=0.5:nCuts="+str(ncuts)+":MaxDepth="+str(depth)+":NegWeightTreatment="+str(negWeights))
-    factory.BookMethod(dataloader, ROOT.TMVA.Types.kBDT, "BDTG_"+str(i),
-                       "!H:!V:VarTransform=D,G:NTrees="+str(ntrees)+":BoostType=Grad:Shrinkage="+str(shrink)+":UseBaggedBoost:BaggedSampleFraction=0.5:nCuts="+str(ncuts)+":MaxDepth="+str(depth)+":NegWeightTreatment="+str(negWeights))
-
-    # Run training, test and evaluation
-    msg.printDebug(str(i)+ " --> Train, test and evaluate the BDT")
-    factory.TrainAllMethods()
-    factory.TestAllMethods()
-    factory.EvaluateAllMethods()
-
-    rootFile.Close()
-
-    return 1
-
-    
-
-# =====================================================================
-#  scanParams: Grid search of params
-# =====================================================================
-def scanParams(debugLevel, config, tree):
-    import itertools
-    msg = msgServer('scanParams', debugLevel)
-
-    i = 0
-    
-    #def defineBDT(config, output, i, shrink=0.1, depth=5, ncuts=20, ntrees=1000):
-    depth = getList(config['BDT_scanner']['depth'])
-    ncuts = getList(config['BDT_scanner']['ncuts'])
-    ntrees = getList(config['BDT_scanner']['ntrees'])
-    shrink = getList(config['BDT_scanner']['shrink'])
-    negWeights = getList(config['BDT_scanner']['negWeights'])
-    
-    comb = [shrink, depth, ncuts, ntrees, negWeights]
-    ncomb = list(itertools.product(*comb))
-
-    msg.printInfo("Grid exploration of BDT")
-    msg.printInfo(" --> depth = "+str(depth))
-    msg.printInfo(" --> ncuts = "+str(ncuts))
-    msg.printInfo(" --> ntrees = "+str(ntrees))
-    msg.printInfo(" --> shrink = "+str(shrink))
-    
-    msg.printInfo("Number of configurations = "+str(len(ncomb)))
-    
-
-    msg.printDebug("Storing log files in: " + config['BDT_scanner']['log_dir'])
-    msg.printDebug("Storing BDTs in: " + config['BDT_scanner']['BDTs_dir'])
-    if not os.path.exists(str(config['BDT_scanner']['log_dir'])): msg.printFatal("log_dir :: The path '" + str(config['BDT_scanner']['BDTs_dir']) + "' does not exist")
-    if not os.path.exists(str(config['BDT_scanner']['BDTs_dir'])): msg.printFatal("BDTs_dir :: The path '" + str(config['BDT_scanner']['BDTs_dir']) + "' does not exist")
-    
-    pool = mp.Pool(processes = 10)
-    msg.printDebug("Start pooling")
-    for conf in ncomb :
-        msg.printDebug("pooling for "+str(conf))
-        defineBDT(debugLevel, config, tree, "BDTG_"+str(i), i, conf[0], conf[1], conf[2], conf[3], conf[4])
-        #result = pool.apply_async(defineBDT,args=(debugLevel, config, tree, "BDTG_"+str(i), i, conf[0], conf[1], conf[2], conf[3], conf[4]))
-        #The Pool object a convenient means of parallelizing the execution of a function across multiple input values, distributing the input data across processes.
-        if i == 4:
-            msg.printInfo("Leaving loop")
-            break
-        i = i+1
-    msg.printDebug("End pooling")
-    
-    
-    #msg.printDebug("Waiting for the processes to end")
-    pool.close()
-        
-    msg.printDebug("Waiting all asynchronous processes to end")
-    pool.join()
-                   
-    msg.printDebug("All processes finished")
-
-
-# =====================================================================
-#  Loader: Loads the input root file
-# =====================================================================
-def Loader(debugLevel, config):
-    msg = msgServer('Loader', debugLevel)
-    filename = config['input']['filename']
-    filepath = config['input']['filepath']
-    if not os.path.exists(str(filepath)):
-        msg.printFatal("The path " + str(filepath) + " does not exist.")
-        msg.printInfo("Exiting")
-        exit()
-    filepath = str(filepath) + str(filename)
-    treeName = str(config['input']['treeName'])
-    
-    if not os.path.exists(filepath):
-        msg.printFatal("The file " + str(filename) + " does not exist in the given path.")
-    
-    inFile = ROOT.TFile.Open(filepath, "READ")
-    tree = inFile.Get(treeName)
-    msg.printDebug("Tree : " + str(tree))
-    return tree, inFile
-
-# =====================================================================
-#  getVars
-# =====================================================================
-def getVars(varString):
-    varlist = varString.split(",")
-    varArray = []
-    for v in varlist :
-        varArray.append(v.strip().split(":"))
-    
-    return varArray
-
-# =====================================================================
-#  getList
-# =====================================================================
-def getList(varString):
-    varArray = varString.split(",")
-    return varArray
-
-
-# =====================================================================
-#  msgServer
-# =====================================================================
-class msgServer:
-    def __init__(self, algName='',debugLevel=4):
-        self.algName = algName
-        self.text = ''
-
-        # output debug level: DEBUG=0, INFO=1, WARNING=2, ERROR=3, FATAL=4
-        self.debugLevel = debugLevel
-        self.EndColor='\033[0m'       # Text color reset
-        self.Black='\033[0;30m'        # Black
-        self.Red='\033[0;31m'          # Red
-        self.Green='\033[0;32m'        # Green
-        self.Yellow='\033[0;33m'       # Yellow
-        self.Blue='\033[0;34m'         # Blue
-        self.Purple='\033[0;35m'       # Purple
-        self.Cyan='\033[0;36m'         # Cyan
-        self.White='\033[0;37m'        # White
-        self.BBlack='\033[1;30m'       # Bold Black
-        self.BRed='\033[1;31m'         # Bold Red
-        self.BGreen='\033[1;32m'       # Bold Green
-        self.BYellow='\033[1;33m'      # Bold Yellow
-        self.BBlue='\033[1;34m'        # Bold Blue
-        self.BPurple='\033[1;35m'      # Bold Purple
-        self.BCyan='\033[1;36m'        # Bold Cyan
-        self.BWhite='\033[1;37m'       # Bold White
-        self.BOLD = "\033[1m"
-
-
-        # Print methods
-    def printDebug(self, msg):
-        if self.debugLevel < 1: print(str(self.algName) + '\t' + str('DEBUG') + '\t \t' + str(msg))
-    def printInfo(self, msg):
-        if self.debugLevel < 2: print(str(self.algName) + '\t' + str('INFO') + '\t\t' + str(msg))
-    def printWarning(self, msg):
-        if self.debugLevel < 3: print(str(self.Yellow) + str(self.algName) + '\t' + str('WARNING') + '\t\t' + str(msg) + str(self.EndColor))
-    def printError(self, msg):
-        if self.debugLevel < 4: print(str(self.Red) + str(self.algName) + '\t' + str('ERROR') + '\t\t' + str(msg)  + str(self.EndColor))
-    def printFatal(self, msg):
-        print(str(self.BRed) + str(self.algName) + '\t' + str('FATAL') + '\t\t' + str(msg) + str(self.EndColor)) #'-16s %-12s %s'+str(self.EndColor)) % (self.algName, 'FATAL', msg)
-    # colors
-    def printBlue(self, msg): print(str(self.Blue) + str(self.algName) + '\t' + str('INFO') + '\t\t' + str(msg)+ str(self.EndColor))
-    def printRed(self, msg): print(str(self.Red) + str(self.algName) + '\t' + str('INFO') + '\t\t' + str(msg)+ str(self.EndColor))
-    def printGreen(self, msg): print(str(self.Green) + str(self.algName) + '\t' + str('INFO') + '\t\t' + str(msg)+ str(self.EndColor))
-
-    # extras
-    def printBold(self, msg): print(str(self.BOLD) + str(self.algName) + '\t' + str('INFO') + '\t\t' + str(msg)+ str(self.EndColor))
-
-
 
 
 
