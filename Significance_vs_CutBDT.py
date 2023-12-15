@@ -10,13 +10,15 @@ from optparse import OptionParser
 import matplotlib
 matplotlib.use('Agg') # Bypass the need to install Tkinter GUI framework
 from matplotlib import pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+
 
 
 ##########################################
 #   Draw plots of S/B and Significance   #
 #   according to the BDT cut             #
 #                                        #
-#   Counting based onn histograms        #
+#   Calculation based on bdt histogram   #
 ##########################################
 
 
@@ -27,7 +29,7 @@ def main(argv):
     parser = OptionParser()
     parser.add_option("-c", "--channel", dest="channel", help="The channel is either SS or OS (default: %default)")
     parser.add_option("-t", "--target", dest="bdt", help="The BDT to plot is either tHq or ttbar (default: %default)")
-    parser.add_option("-s", "--saveHisto", action='store_true', dest="saveHist", default=False, help="When the flag is present, the histograms are saved.")
+    #parser.add_option("-s", "--saveHisto", action='store_true', dest="saveHist", default=True, help="When the flag is present, the histograms are saved.")
     parser.add_option("-r", "--readHisto", action='store_true', dest="readHist", default=False, help="When the flag is present, read the TH1Fs intead of computing them.")
     
 
@@ -44,11 +46,12 @@ def main(argv):
     bdt = options.bdt
     lumi = 140
 
-    saveHisto = options.saveHist
+    #saveHisto = options.saveHist
     readHist = options.readHist
 
     #######################################################
     # Build the histograms for target and rest processes  #
+    # Do this only once. Rest of times, use option readHist #
     #######################################################
     if readHist == False: # Use if is first time This BDT
         if channel == "OS":
@@ -93,8 +96,6 @@ def main(argv):
 
         # invert the DSID 
         dsid_to_process = {dsid: process for process, dsids in DSID_list.items() for dsid in dsids}
-
-
 
         print("Filling chains")
         for file in os.listdir(samples_dir):
@@ -170,21 +171,21 @@ def main(argv):
 
 
         # Store the histo as root objet: This way we don't have to read it every time
-        if saveHisto == True:
-            print("Saving histogram histogram") 
-            if bdt == 'tHq' and channel == "OS": h1_targ_object = TFile("TH1F_BDT_tHq_OS_Target.root", "recreate")
-            if bdt == 'ttbar' and channel == "OS": h1_targ_object = TFile("TH1F_BDT_ttbar_OS_Target.root", "recreate")
-            if bdt == 'tHq' and channel == "SS": h1_targ_object = TFile("TH1F_BDT_tHq_SS_Target.root", "recreate")
-            h1_targ_object.cd()
-            h1_BDT_targ.Write()
-            h1_targ_object.Close()
-            if bdt == 'tHq' and channel == "OS": h1_rest_object = TFile("TH1F_BDT_tHq_OS_Rest.root", "recreate")
-            if bdt == 'ttbar' and channel == "OS": h1_rest_object = TFile("TH1F_BDT_ttbar_OS_Rest.root", "recreate")
-            if bdt == 'tHq' and channel == "SS": h1_rest_object = TFile("TH1F_BDT_tHq_SS_Rest.root", "recreate")
-            h1_rest_object.cd()
-            h1_BDT_rest.Write()
-            h1_rest_object.Close()
-            print("Histogram histogram saved")
+        #if saveHisto == True:
+        print("Saving histogram histogram") 
+        if bdt == 'tHq' and channel == "OS": h1_targ_object = TFile("TH1F_BDT_tHq_OS_Target.root", "recreate")
+        if bdt == 'ttbar' and channel == "OS": h1_targ_object = TFile("TH1F_BDT_ttbar_OS_Target.root", "recreate")
+        if bdt == 'tHq' and channel == "SS": h1_targ_object = TFile("TH1F_BDT_tHq_SS_Target.root", "recreate")
+        h1_targ_object.cd()
+        h1_BDT_targ.Write()
+        h1_targ_object.Close()
+        if bdt == 'tHq' and channel == "OS": h1_rest_object = TFile("TH1F_BDT_tHq_OS_Rest.root", "recreate")
+        if bdt == 'ttbar' and channel == "OS": h1_rest_object = TFile("TH1F_BDT_ttbar_OS_Rest.root", "recreate")
+        if bdt == 'tHq' and channel == "SS": h1_rest_object = TFile("TH1F_BDT_tHq_SS_Rest.root", "recreate")
+        h1_rest_object.cd()
+        h1_BDT_rest.Write()
+        h1_rest_object.Close()
+        print("Histogram histogram saved")
 
     #######################################################
     # Build the histograms for target and rest processes  #
@@ -222,6 +223,7 @@ def main(argv):
     StoBs = []
     best_significance = 0 
     best_threshold = 0
+    signal_evts = []
     print("Explore BDT thresholds")  
     for threshold in cutPoints:
         nEvents_target, nEvents_rest = get_yields_left(h1_BDT_targ, h1_BDT_rest, threshold)
@@ -244,6 +246,7 @@ def main(argv):
             StoB = 0
             print("Info :: If " +str(threshold)+" --> significance 0")
 
+        signal_evts.append(nEvents_target)
         significances.append(significance)
         StoBs.append(StoB)
 
@@ -261,6 +264,7 @@ def main(argv):
     bdt_cuts_array = array('f', cutPoints)
     significances_array = array('f', significances)
     StoBs_array = array('f', StoBs)
+    signal_evts_array = array('f', signal_evts)
 
     #print bdt_cuts_array
     #print significances_array
@@ -294,38 +298,64 @@ def main(argv):
         plt.Close()
 
     if True:
-        print("Single panel plot")
         # Create a figure and a single subplot
-        fig, ax1 = plt.subplots()
+        fig, ax1 = plt.subplots(figsize=(12, 6))  # Adjusting the figure size
 
-        # Plotting significances_array vs bdt_cuts_array on the primary axis
-        color = 'tab:red'
-        if bdt == 'tHq' and channel == "OS": ax1.set_xlabel(r'BDT($tHq|_{OS}$) threshold')
-        if bdt == 'ttbar' and channel == "OS": ax1.set_xlabel(r'BDT($t\bar{t}|_{OS}$) threshold')
-        if bdt == 'tHq' and channel == "SS": ax1.set_xlabel(r'BDT($tHq|_{SS}$) threshold')
-        ax1.set_ylabel(r'Significance', color=color)
-        ax1.plot(bdt_cuts_array, significances_array, color=color)
-        ax1.tick_params(axis='y', labelcolor=color)
+        # Set xlabel based on condition
+        if bdt == 'tHq' and channel == "OS": 
+            ax1.set_xlabel(r'BDT($tHq|_{OS}$) threshold')
+        elif bdt == 'ttbar' and channel == "OS": 
+            ax1.set_xlabel(r'BDT($t\bar{t}|_{OS}$) threshold')
+        elif bdt == 'tHq' and channel == "SS": 
+            ax1.set_xlabel(r'BDT($tHq|_{SS}$) threshold')
 
-        # Create a second axes that shares the same x-axis
+        # Create the second y-axis
         ax2 = ax1.twinx()
 
-        # Plotting StoBs_array vs bdt_cuts_array on the secondary axis
-        color = 'tab:blue'
-        if bdt == 'tHq':
-            ax2.set_ylabel(r'$\frac{S}{B} \, [\%]$', color=color, fontsize=16)
-        else:
-            ax2.set_ylabel(r'$\frac{t\bar{t}}{All} \, [\%]$', color=color, fontsize=16)
-        ax2.plot(bdt_cuts_array, StoBs_array, color=color)
-        ax2.tick_params(axis='y', labelcolor=color)
+        # Create the third y-axis
+        ax3 = ax1.twinx()
+        ax3.spines["right"].set_position(("axes", 1.15))  # Position the third y-axis further out
+        ax3.spines["right"].set_visible(True)
 
-        # Adjust layout
-        fig.tight_layout()
+        # Define colors for each y-axis
+        color_sig = 'tab:red'
+        color_stob = 'tab:blue'
+        color_nEvts = 'tab:green'
 
-        plt.savefig('BDT_thereholds_'+str(channel)+'_'+str(bdt)+'_SinglePanel.pdf', format='pdf')
+        # Define y-axis labels
+        ylabel2 = r'$\frac{tHq}{Bkg}$ (%)' if bdt == 'tHq' else r'$\frac{t\bar{t}}{All}$ (%)'
+        ylabel3 = r'Yields($tHq$)' if bdt == 'tHq' else r'Yields($t\bar{t}$)'
+
+        # Set y-axis labels and colors
+        ax1.set_ylabel('Significance', color=color_sig)
+        ax2.set_ylabel(ylabel2, color=color_stob, fontsize=16)
+        ax3.set_ylabel(ylabel3, color=color_nEvts, fontsize=14)
+
+        # Plot the data
+        p1, = ax1.plot(bdt_cuts_array, significances_array, color=color_sig, label='Significance')
+        if bdt == 'tHq': p2, = ax2.plot(bdt_cuts_array, StoBs_array, color=color_stob, label='S/B')
+        if bdt == 'ttbar': p2, = ax2.plot(bdt_cuts_array, StoBs_array, color=color_stob, label='$t\bar{t}$/All')
+        p3, = ax3.plot(bdt_cuts_array, signal_evts_array, color=color_nEvts, label='Signal Events')
+
+        # Set tick parameters
+        tkw = dict(size=4, width=1.5)
+        ax1.tick_params(axis='y', labelcolor=color_sig, **tkw)
+        ax2.tick_params(axis='y', labelcolor=color_stob, **tkw)
+        ax3.tick_params(axis='y', labelcolor=color_nEvts, **tkw)
+        ax1.tick_params(axis='x', **tkw)
+
+        # Legend
+        lines = [p1, p2, p3]
+        labels = [line.get_label() for line in lines]
+        ax1.legend(lines, labels, loc='upper left')
+
+        # Adjust the layout to make room for the third y-axis
+        fig.tight_layout(rect=[0, 0, 0.9, 1])  # Left, Bottom, Right, Top
+        plt.subplots_adjust(right=0.75)
+
+        # Save the figure
+        plt.savefig('BDT_thresholds_'+str(channel)+'_'+str(bdt)+'_SinglePanel_with_nEvts.pdf', format='pdf')
         plt.close()
-
-    
 
 
 
