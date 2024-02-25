@@ -18,9 +18,14 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 #   Draw plots of S/B and Significance   #
 #   according to the BDT cut             #
 #                                        #
-#   Calculation based on bdt histogram   #
-##########################################
+#   Counting based on histograms         #
+#                                        ########################
+#   Run the program frist to store the histograms. This may     #
+#   take a bit but the rest of times it runs faster ;)          #
+#################################################################
 
+# Example: python Significance_vs_CutBDT.py --channel='OS' --target='tHq' --readHist
+# if running for first time do: python Significance_vs_CutBDT.py --channel='OS' --target='tHq' 
 
 # =========================================
 #  main
@@ -30,10 +35,10 @@ def main(argv):
     parser.add_option("-c", "--channel", dest="channel", help="The channel is either SS or OS (default: %default)")
     parser.add_option("-t", "--target", dest="bdt", help="The BDT to plot is either tHq or ttbar (default: %default)")
     #parser.add_option("-s", "--saveHisto", action='store_true', dest="saveHist", default=True, help="When the flag is present, the histograms are saved.")
-    parser.add_option("-r", "--readHisto", action='store_true', dest="readHist", default=False, help="When the flag is present, read the TH1Fs intead of computing them.")
+    parser.add_option("-r", "--readHist", action='store_true', dest="readHist", default=False, help="When the flag is present, read the TH1Fs intead of computing them.")
     
 
-    parser.set_defaults(channel='OS', bdt='tHq')
+    parser.set_defaults(channel='OS', bdt='ttbar')
 
     try:
         (options, args) = parser.parse_args()
@@ -49,15 +54,18 @@ def main(argv):
     #saveHisto = options.saveHist
     readHist = options.readHist
 
-    #######################################################
-    # Build the histograms for target and rest processes  #
+    #########################################################
+    # Build the histograms for target and rest processes    #
     # Do this only once. Rest of times, use option readHist #
-    #######################################################
-    if readHist == False: # Use if is first time This BDT
+    #########################################################
+    if not readHist: # Use if this is first time reading the BDT that you want to study
         if channel == "OS":
-            samples_dir = "/lustre/ific.uv.es/grid/atlas/t3/pamarag/tHq_analysis/13TeV/EBreview_v34_dilepOStau_PLIV_SFs_syst_BDTassignment_lep3_pt_min14GeV_BDT_tHq_ttbar/nominal_Loose"
+            #samples_dir = "/lustre/ific.uv.es/grid/atlas/t3/pamarag/tHq_analysis/13TeV/EBreview_v34_dilepOStau_PLIV_SFs_syst_BDTassignment_lep3_pt_min14GeV_BDT_tHq_ttbar/nominal_Loose"
+            #samples_dir = "/lustre/ific.uv.es/grid/atlas/t3/pamarag/tHq_analysis/13TeV/EBreview_v34_dilepOStau_BDT_tHq_ttbar/nominal_Loose"  
+            samples_dir = "/lustre/ific.uv.es/grid/atlas/t3/cescobar/tHq_analysis/13TeV/V34_2LOS1TAU_BDT_tHq_ttbar/nominal_Loose/"
         elif channel == "SS":
-            samples_dir = "/lustre/ific.uv.es/grid/atlas/t3/pamarag/tHq_analysis/13TeV/EBreview_v34_dilepSStau_PLIV_SFs_syst_BDTassignment_lep3_pt_min14GeV_BDT_tHq/nominal_Loose"
+            #samples_dir = "/lustre/ific.uv.es/grid/atlas/t3/pamarag/tHq_analysis/13TeV/EBreview_v34_dilepSStau_PLIV_SFs_syst_BDTassignment_lep3_pt_min14GeV_BDT_tHq/nominal_Loose"
+            samples_dir = "/lustre/ific.uv.es/grid/atlas/t3/pamarag/tHq_analysis/13TeV/NewSamples_2024_SS_bdt_tH/nominal_Loose"
         else:
             print("Error: Channel must be either OS or SS")
             exit()
@@ -65,12 +73,13 @@ def main(argv):
         
         Chain_tHq = TChain("tHqLoop_nominal_Loose","") 
         Chain_ttbar = TChain("tHqLoop_nominal_Loose","")
+        Chain_tWH = TChain("tHqLoop_nominal_Loose","")
         Chain_others = TChain("tHqLoop_nominal_Loose","") # Rest of processes
 
         
         # Dataset ID
         DSID_list ={
-        'tHq':['346799'],
+        'tHq':['346799', '508776'],
         'ttbar':['410470'],
         'Zjet':['700320', '700321', '700322', '700323', '700324', '700325', '700326', '700327', '700328', '700329', '700330', '700331', '700332', '700333', '700334'],
         'Wjet':['700338', '700339', '700340', '700341', '700342', '700343', '700344', '700345', '700346', '700347', '700348', '700349'],
@@ -85,7 +94,7 @@ def main(argv):
         't-channel':['410658','410659'],
         'tW':['410646','410647'],
         's-channel':['410644','410645'],
-        'tWH':['508776'],
+        #'tWH':['508776'],
         'ggH': ['342282'],
         'VBFH': ['342283'],
         'WH': ['342284'],
@@ -97,21 +106,60 @@ def main(argv):
         # invert the DSID 
         dsid_to_process = {dsid: process for process, dsids in DSID_list.items() for dsid in dsids}
 
-        print("Filling chains")
-        for file in os.listdir(samples_dir):
-            file_path = samples_dir + "/"+ str(file) + str("/") + tree
-            dsid = extract_dsid(file)    
-            if dsid in dsid_to_process:
-                process = dsid_to_process[dsid] # get process
-                if process == 'tHq':
+
+        # Read the merged samples or the unmerged
+        dsid_found = False
+        for file in os.listdir(samples_dir): # Check for merged samples
+            for dsid_group in DSID_list.values():
+                for dsid in dsid_group:
+                    if dsid in file:
+                        dsid_found = True # This means unmerged samples
+                    break  
+                if dsid_found:
+                    break 
+            if dsid_found:
+                break  
+
+        # Unmerged samples:
+        if dsid_found:
+            print("Working on unmerged samples")
+            print("Filling chains")
+            for file in os.listdir(samples_dir):
+                file_path = samples_dir + "/"+ str(file) + str("/") + tree
+                dsid = extract_dsid(file)    
+                if dsid in dsid_to_process:
+                    process = dsid_to_process[dsid] # get process
+                    if process == 'tHq':
+                        Chain_tHq.Add(file_path)
+                        #print("File " + str(file) + " is tHq")
+                    elif process == 'ttbar':
+                        Chain_ttbar.Add(file_path)
+                        #print("File " + str(file) + " is ttbar")
+                    elif process == 'tWH':
+                        Chain_tWH.Add(file_path)
+                    else:  # For all other processes
+                        Chain_others.Add(file_path)
+                        #print("File " + str(file) + " is other")
+        # Merged samples
+        if dsid_found == False:
+            print("Working on merged samples")
+            print("Filling chains")
+            for file in os.listdir(samples_dir):
+                file_path = samples_dir + "/"+ str(file) + str("/") + tree   
+                if 'tHq.root' in file:
                     Chain_tHq.Add(file_path)
-                    #print("File " + str(file) + " is tHq")
-                elif process == 'ttbar':
+                    print("File "+str(file)+" is tHq")
+                elif 'ttbar.root' in file:
                     Chain_ttbar.Add(file_path)
-                    #print("File " + str(file) + " is ttbar")
-                else:  # For all other processes
+                    print("Filen "+str(file)+" is ttbar")
+                elif 'tWH.root' in file:
+                    Chain_tWH.Add(file_path)
+                    print("File "+str(file)+" is tWH")
+                elif 'data' in file:
+                    print("File "+str(file)+" is ignored")
+                else:
                     Chain_others.Add(file_path)
-                    #print("File " + str(file) + " is other")
+                    print("File " + str(file) + " is other")
         
         print("Define target and rest")
         # Initialize Chain_rest as a TChain
@@ -120,6 +168,18 @@ def main(argv):
 
         if bdt == 'tHq':
             Chain_target = Chain_tHq
+            for file in Chain_ttbar.GetListOfFiles():
+                Chain_rest.Add(file.GetTitle())
+            for file in Chain_tWH.GetListOfFiles():
+                Chain_rest.Add(file.GetTitle())
+            for file in Chain_others.GetListOfFiles():
+                Chain_rest.Add(file.GetTitle())
+
+        elif bdt == 'tH':
+            for file in Chain_tHq:
+                Chain_target.Add(file.GetTitle())
+            for file in Chain_tWH:
+                Chain_target.Add(file.GetTitle())
             for file in Chain_ttbar.GetListOfFiles():
                 Chain_rest.Add(file.GetTitle())
             for file in Chain_others.GetListOfFiles():
@@ -132,10 +192,13 @@ def main(argv):
                 Chain_target = Chain_ttbar
                 for file in Chain_tHq.GetListOfFiles():
                     Chain_rest.Add(file.GetTitle())
+                for file in Chain_tWH.GetListOfFiles():
+                    Chain_rest.Add(file.GetTitle())
                 for file in Chain_others.GetListOfFiles():
                     Chain_rest.Add(file.GetTitle())
         else:
-            print("Error: the otpion '--target' must be either tHq or ttbar")
+            print("Error: the otpion '--target' must be either tHq, tH or ttbar")
+            exit()
 
 
         h1_BDT_targ  = TH1F("BDT_targ", "BDT", 50,0,1)
@@ -214,7 +277,7 @@ def main(argv):
         h1_BDT_targ = f_target.Get("BDT_targ")
         h1_BDT_rest = f_rest.Get("BDT_rest")
     else:
-        print("Error")
+        print("Error :: readHist must be True or False")
         exit()
     
     # Loop over cut-points
@@ -303,11 +366,11 @@ def main(argv):
 
         # Set xlabel based on condition
         if bdt == 'tHq' and channel == "OS": 
-            ax1.set_xlabel(r'BDT($tHq|_{OS}$) threshold')
+            ax1.set_xlabel(r'BDT($tH|_{OS}$) hreshold', fontsize=16)
         elif bdt == 'ttbar' and channel == "OS": 
-            ax1.set_xlabel(r'BDT($t\bar{t}|_{OS}$) threshold')
+            ax1.set_xlabel(r'BDT($t\bar{t}|_{OS}$) threshold', fontsize=16)
         elif bdt == 'tHq' and channel == "SS": 
-            ax1.set_xlabel(r'BDT($tHq|_{SS}$) threshold')
+            ax1.set_xlabel(r'BDT($tH|_{SS}$) threshold', fontsize=16)
 
         # Create the second y-axis
         ax2 = ax1.twinx()
@@ -324,18 +387,19 @@ def main(argv):
 
         # Define y-axis labels
         ylabel2 = r'$\frac{tHq}{Bkg}$ (%)' if bdt == 'tHq' else r'$\frac{t\bar{t}}{All}$ (%)'
-        ylabel3 = r'Yields($tHq$)' if bdt == 'tHq' else r'Yields($t\bar{t}$)'
+        ylabel3 = r'$tHq$ yields' if bdt == 'tHq' else r'$t\bar{t}$ yields'
 
         # Set y-axis labels and colors
-        ax1.set_ylabel('Significance', color=color_sig)
-        ax2.set_ylabel(ylabel2, color=color_stob, fontsize=16)
+        ax1.set_ylabel('Significance', color=color_sig, fontsize=16)
+        ax2.set_ylabel(ylabel2, color=color_stob, fontsize=18)
         ax3.set_ylabel(ylabel3, color=color_nEvts, fontsize=14)
 
         # Plot the data
         p1, = ax1.plot(bdt_cuts_array, significances_array, color=color_sig, label='Significance')
         if bdt == 'tHq': p2, = ax2.plot(bdt_cuts_array, StoBs_array, color=color_stob, label='S/B')
-        if bdt == 'ttbar': p2, = ax2.plot(bdt_cuts_array, StoBs_array, color=color_stob, label='$t\bar{t}$/All')
-        p3, = ax3.plot(bdt_cuts_array, signal_evts_array, color=color_nEvts, label='Signal Events')
+        if bdt == 'ttbar': p2, = ax2.plot(bdt_cuts_array, StoBs_array, color=color_stob, label=r'$t\bar{t}$/All')
+        if bdt == 'tHq': p3, = ax3.plot(bdt_cuts_array, signal_evts_array, color=color_nEvts, label='Signal events')
+        if bdt == 'ttbar': p3, = ax3.plot(bdt_cuts_array, signal_evts_array, color=color_nEvts, label=r'$t\bar{t}$ events')
 
         # Set tick parameters
         tkw = dict(size=4, width=1.5)
@@ -354,9 +418,8 @@ def main(argv):
         plt.subplots_adjust(right=0.75)
 
         # Save the figure
-        plt.savefig('BDT_thresholds_'+str(channel)+'_'+str(bdt)+'_SinglePanel_with_nEvts.pdf', format='pdf')
+        plt.savefig('BDT_Resplicated_For_Thesis_thresholds_'+str(channel)+'_'+str(bdt)+'_SinglePanel_with_nEvts_NewSamples.pdf', format='pdf')
         plt.close()
-
 
 
 # =========================================
@@ -367,7 +430,6 @@ def get_yields_left(h1_target, h1_rest, cut):
     nEvents_target = h1_target.Integral(h1_target.FindFixBin(cut), h1_target.FindFixBin(1))
     nEvents_rest = h1_rest.Integral(h1_rest.FindFixBin(cut), h1_rest.FindFixBin(1))
     return nEvents_target, nEvents_rest 
-
 
 # =========================================
 #  extract_dsid
