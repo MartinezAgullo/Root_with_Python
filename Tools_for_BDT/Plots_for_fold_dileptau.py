@@ -1,6 +1,13 @@
-#########
-##  Plots_for_fold_dileptau.py :: Draws the BDT socres for all the folds simultaneously
-#######
+#################################################################
+##  Plots_for_fold_dileptau.py  
+#    Draws the BDT socres for all the folds simultaneously,
+#    Select the channel (SS/OS) and the BDT (tHq/ttbar)
+#    using Channel amd BDT options below.
+#    
+#    Needs the virtual envirorment
+#       source ../tHqMVA/setupROOT.sh
+#       source ../tHqMVA/venv/bin/activate
+#################################################
 
 import os
 import sys
@@ -16,12 +23,13 @@ from Reader import Root2Df
 
 lumi = 140
 Channel = "OS"
-BDT = "tHq"
+BDT = "ttbar"
 
 print("BDT("+str(BDT)+"|"+str(Channel)+")")
 
 if Channel == "OS":
-    dir_path_n = '/lustre/ific.uv.es/grid/atlas/t3/pamarag/tHq_analysis/13TeV/EBreview_v34_dilepOStau_PLIV_SFs_syst_BDTassignment_lep3_pt_min14GeV_BDT_tHq_ttbar/nominal_Loose/'
+    #dir_path_n = '/lustre/ific.uv.es/grid/atlas/t3/pamarag/tHq_analysis/13TeV/EBreview_v34_dilepOStau_PLIV_SFs_syst_BDTassignment_lep3_pt_min14GeV_BDT_tHq_ttbar/nominal_Loose/'
+    dir_path_n = '/lustre/ific.uv.es/grid/atlas/t3/cescobar/tHq_analysis/13TeV/V34_2LOS1TAU_BDT_tHq_ttbar/nominal_Loose/'
     TreeName = 'tHqLoop_nominal_Loose'
     branches = ['bdt_tHq', 'bdt_ttbar', 'weight_nominalWtau', 'eventNumber', 'mcChannelNumber']
     text = r'$\sqrt{s}=13\ \mathrm{TeV},\ 140\ \mathrm{fb}^{-1}$' + '\n' + r'$tHq(2\ell\mathrm{OS} + \tau_{\mathrm{had}})$ channel' + '\n' + 'Pre-selection' + '\n' + 'Pre-Fit'
@@ -51,13 +59,13 @@ colors = ['C0', 'C1', 'C2', 'C3', 'C4']
 # Store histogram for fold=0
 fold_0_hist = None # for lower pannel
 
-###
-# Main Loop
-###
+###############
+#  Main Loop  #
+###############
 for fold in folds:
     print("Ploting BDT for Fold "+str(fold))
     if BDT == "tHq": 
-        df_0 = df[df['eventNumber'] % 5 == fold][['bdt_tHq', 'weight_nominalWtau']]
+        df_0 = df[df['eventNumber'] % 5 == fold][['bdt_tHq', 'weight_nominalWtau']] # Separate by fold
         hist = ax1.hist(df_0['bdt_tHq'], bins, histtype='step', label='k={}'.format(fold), weights=df_0['weight_nominalWtau'] * lumi, color=colors[fold], density=True) # Plot the histogram
         #counts, bin_edges = np.histogram(df_0['bdt_tHq'], bins=bins, weights=df_0['weight_nominalWtau'] * lumi)
         
@@ -155,3 +163,9 @@ if BDT == "ttbar":
     plt.savefig('test_fold_tHq_2L_'+str(Channel)+'_1Tau_ttbar.png')
     plt.savefig('test_fold_tHq_2L_'+str(Channel)+'_1Tau_ttbar.pdf')
 plt.close()
+
+
+
+
+
+
