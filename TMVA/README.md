@@ -1,4 +1,4 @@
-# $tHq$ (2$\ell$ SS +$\tau_{\text{had}}$) - Lepton origin assignment
+# $tHq$ (2$$\ell$$ SS +$$\tau_{\text{had}}$$) - Lepton origin assignment
 
 ML-based tool based on TMVA library of ROOT to determine the parent particle of the light leptons in the  $tHq$ (2$\ell$ SS +$\tau_{\text{had}}$) search.
 
